@@ -1,3 +1,9 @@
+// Beego (http://beego.me/)
+// @description beego is an open-source, high-performance web framework for the Go programming language.
+// @link        http://github.com/astaxie/beego for the canonical source repository
+// @license     http://github.com/astaxie/beego/blob/master/LICENSE
+// @authors     astaxie
+
 package config
 
 import (
@@ -5,8 +11,10 @@ import (
 	"io/ioutil"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 
+	"github.com/astaxie/beego/config"
 	"github.com/beego/x2j"
 )
 
@@ -17,7 +25,7 @@ type XMLConfig struct {
 }
 
 // Parse returns a ConfigContainer with parsed xml config map.
-func (xmls *XMLConfig) Parse(filename string) (ConfigContainer, error) {
+func (xmls *XMLConfig) Parse(filename string) (config.ConfigContainer, error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, err
@@ -72,6 +80,11 @@ func (c *XMLConfigContainer) String(key string) string {
 	return ""
 }
 
+// Strings returns the []string value for a given key.
+func (c *XMLConfigContainer) Strings(key string) []string {
+	return strings.Split(c.String(key), ";")
+}
+
 // WriteValue writes a new value for key.
 func (c *XMLConfigContainer) Set(key, val string) error {
 	c.Lock()
@@ -89,5 +102,5 @@ func (c *XMLConfigContainer) DIY(key string) (v interface{}, err error) {
 }
 
 func init() {
-	Register("xml", &XMLConfig{})
+	config.Register("xml", &XMLConfig{})
 }

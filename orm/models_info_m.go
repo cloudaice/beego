@@ -1,3 +1,9 @@
+// Beego (http://beego.me/)
+// @description beego is an open-source, high-performance web framework for the Go programming language.
+// @link        http://github.com/astaxie/beego for the canonical source repository
+// @license     http://github.com/astaxie/beego/blob/master/LICENSE
+// @authors     slene
+
 package orm
 
 import (
@@ -7,6 +13,7 @@ import (
 	"reflect"
 )
 
+// single model info
 type modelInfo struct {
 	pkg       string
 	name      string
@@ -20,6 +27,7 @@ type modelInfo struct {
 	isThrough bool
 }
 
+// new model info
 func newModelInfo(val reflect.Value) (info *modelInfo) {
 	var (
 		err error
@@ -41,6 +49,9 @@ func newModelInfo(val reflect.Value) (info *modelInfo) {
 	for i := 0; i < ind.NumField(); i++ {
 		field := ind.Field(i)
 		sf = ind.Type().Field(i)
+		if sf.PkgPath != "" {
+			continue
+		}
 		fi, err = newFieldInfo(info, field, sf)
 
 		if err != nil {
@@ -79,6 +90,8 @@ func newModelInfo(val reflect.Value) (info *modelInfo) {
 	return
 }
 
+// combine related model info to new model info.
+// prepare for relation models query.
 func newM2MModelInfo(m1, m2 *modelInfo) (info *modelInfo) {
 	info = new(modelInfo)
 	info.fields = newFields()

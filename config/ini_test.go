@@ -1,3 +1,9 @@
+// Beego (http://beego.me/)
+// @description beego is an open-source, high-performance web framework for the Go programming language.
+// @link        http://github.com/astaxie/beego for the canonical source repository
+// @license     http://github.com/astaxie/beego/blob/master/LICENSE
+// @authors     astaxie
+
 package config
 
 import (
@@ -19,6 +25,7 @@ copyrequestbody = true
 key1="asta"
 key2 = "xie"
 CaseInsensitive = true
+peers = one;two;three
 `
 
 func TestIni(t *testing.T) {
@@ -78,4 +85,11 @@ func TestIni(t *testing.T) {
 	if v, err := iniconf.Bool("demo::caseinsensitive"); err != nil || v != true {
 		t.Fatal("get demo.caseinsensitive error")
 	}
+
+	if data := iniconf.Strings("demo::peers"); len(data) != 3 {
+		t.Fatal("get strings error", data)
+	} else if data[0] != "one" {
+		t.Fatal("get first params error not equat to one")
+	}
+
 }

@@ -1,4 +1,9 @@
-// Zero-downtime restarts in Go.
+// Beego (http://beego.me/)
+// @description beego is an open-source, high-performance web framework for the Go programming language.
+// @link        http://github.com/astaxie/beego for the canonical source repository
+// @license     http://github.com/astaxie/beego/blob/master/LICENSE
+// @authors     astaxie
+
 package beego
 
 import (
@@ -30,7 +35,7 @@ type conn struct {
 	net.Conn
 	wg      *sync.WaitGroup
 	isclose bool
-	lock    sync.Mutex
+	lock    *sync.Mutex
 }
 
 // Close current processing connection.
@@ -103,7 +108,6 @@ func WaitSignal(l net.Listener) error {
 			return nil
 		}
 	}
-	return nil // It'll never get here.
 }
 
 // Kill current running os process.

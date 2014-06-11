@@ -1,7 +1,14 @@
+// Beego (http://beego.me/)
+// @description beego is an open-source, high-performance web framework for the Go programming language.
+// @link        http://github.com/astaxie/beego for the canonical source repository
+// @license     http://github.com/astaxie/beego/blob/master/LICENSE
+// @authors     slene
+
 package orm
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -138,8 +145,17 @@ func throwFailNow(t *testing.T, err error, args ...interface{}) {
 	}
 }
 
+func TestGetDB(t *testing.T) {
+	if db, err := GetDB(); err != nil {
+		throwFailNow(t, err)
+	} else {
+		err = db.Ping()
+		throwFailNow(t, err)
+	}
+}
+
 func TestSyncDb(t *testing.T) {
-	RegisterModel(new(Data), new(DataNull))
+	RegisterModel(new(Data), new(DataNull), new(DataCustom))
 	RegisterModel(new(User))
 	RegisterModel(new(Profile))
 	RegisterModel(new(Post))
@@ -155,7 +171,7 @@ func TestSyncDb(t *testing.T) {
 }
 
 func TestRegisterModels(t *testing.T) {
-	RegisterModel(new(Data), new(DataNull))
+	RegisterModel(new(Data), new(DataNull), new(DataCustom))
 	RegisterModel(new(User))
 	RegisterModel(new(Profile))
 	RegisterModel(new(Post))
@@ -258,12 +274,78 @@ func TestNullDataTypes(t *testing.T) {
 	err = dORM.Read(&d)
 	throwFail(t, err)
 
+	throwFail(t, AssertIs(d.NullBool.Valid, false))
+	throwFail(t, AssertIs(d.NullString.Valid, false))
+	throwFail(t, AssertIs(d.NullInt64.Valid, false))
+	throwFail(t, AssertIs(d.NullFloat64.Valid, false))
+
 	_, err = dORM.Raw(`INSERT INTO data_null (boolean) VALUES (?)`, nil).Exec()
 	throwFail(t, err)
 
 	d = DataNull{Id: 2}
 	err = dORM.Read(&d)
 	throwFail(t, err)
+
+	d = DataNull{
+		DateTime:    time.Now(),
+		NullString:  sql.NullString{String: "test", Valid: true},
+		NullBool:    sql.NullBool{Bool: true, Valid: true},
+		NullInt64:   sql.NullInt64{Int64: 42, Valid: true},
+		NullFloat64: sql.NullFloat64{Float64: 42.42, Valid: true},
+	}
+
+	id, err = dORM.Insert(&d)
+	throwFail(t, err)
+	throwFail(t, AssertIs(id, 3))
+
+	d = DataNull{Id: 3}
+	err = dORM.Read(&d)
+	throwFail(t, err)
+
+	throwFail(t, AssertIs(d.NullBool.Valid, true))
+	throwFail(t, AssertIs(d.NullBool.Bool, true))
+
+	throwFail(t, AssertIs(d.NullString.Valid, true))
+	throwFail(t, AssertIs(d.NullString.String, "test"))
+
+	throwFail(t, AssertIs(d.NullInt64.Valid, true))
+	throwFail(t, AssertIs(d.NullInt64.Int64, 42))
+
+	throwFail(t, AssertIs(d.NullFloat64.Valid, true))
+	throwFail(t, AssertIs(d.NullFloat64.Float64, 42.42))
+}
+
+func TestDataCustomTypes(t *testing.T) {
+	d := DataCustom{}
+	ind := reflect.Indirect(reflect.ValueOf(&d))
+
+	for name, value := range Data_Values {
+		e := ind.FieldByName(name)
+		if !e.IsValid() {
+			continue
+		}
+		e.Set(reflect.ValueOf(value).Convert(e.Type()))
+	}
+
+	id, err := dORM.Insert(&d)
+	throwFail(t, err)
+	throwFail(t, AssertIs(id, 1))
+
+	d = DataCustom{Id: 1}
+	err = dORM.Read(&d)
+	throwFail(t, err)
+
+	ind = reflect.Indirect(reflect.ValueOf(&d))
+
+	for name, value := range Data_Values {
+		e := ind.FieldByName(name)
+		if !e.IsValid() {
+			continue
+		}
+		vu := e.Interface()
+		value = reflect.ValueOf(value).Convert(e.Type()).Interface()
+		throwFail(t, AssertIs(vu == value, true), value, vu)
+	}
 }
 
 func TestCRUD(t *testing.T) {
@@ -519,6 +601,10 @@ func TestOperators(t *testing.T) {
 	throwFail(t, err)
 	throwFail(t, AssertIs(num, 1))
 
+	num, err = qs.Filter("user_name__exact", String("slene")).Count()
+	throwFail(t, err)
+	throwFail(t, AssertIs(num, 1))
+
 	num, err = qs.Filter("user_name__exact", "slene").Count()
 	throwFail(t, err)
 	throwFail(t, AssertIs(num, 1))
@@ -559,11 +645,11 @@ func TestOperators(t *testing.T) {
 	throwFail(t, err)
 	throwFail(t, AssertIs(num, 3))
 
-	num, err = qs.Filter("status__lt", 3).Count()
+	num, err = qs.Filter("status__lt", Uint(3)).Count()
 	throwFail(t, err)
 	throwFail(t, AssertIs(num, 2))
 
-	num, err = qs.Filter("status__lte", 3).Count()
+	num, err = qs.Filter("status__lte", Int(3)).Count()
 	throwFail(t, err)
 	throwFail(t, AssertIs(num, 3))
 
@@ -617,6 +703,14 @@ func TestOperators(t *testing.T) {
 
 	n1, n2 := 1, 2
 	num, err = qs.Filter("status__in", []*int{&n1}, &n2).Count()
+	throwFail(t, err)
+	throwFail(t, AssertIs(num, 2))
+
+	num, err = qs.Filter("id__between", 2, 3).Count()
+	throwFail(t, err)
+	throwFail(t, AssertIs(num, 2))
+
+	num, err = qs.Filter("id__between", []int{2, 3}).Count()
 	throwFail(t, err)
 	throwFail(t, AssertIs(num, 2))
 }
@@ -1322,58 +1416,6 @@ func TestRawQueryRow(t *testing.T) {
 		}
 	}
 
-	type Tmp struct {
-		Skip0    string
-		Id       int
-		Char     *string
-		Skip1    int `orm:"-"`
-		Date     time.Time
-		DateTime time.Time
-	}
-
-	Boolean = false
-	Text = ""
-	Int64 = 0
-	Uint = 0
-
-	tmp := new(Tmp)
-
-	cols = []string{
-		"int", "char", "date", "datetime", "boolean", "text", "int64", "uint",
-	}
-	query = fmt.Sprintf("SELECT NULL, %s%s%s FROM data WHERE id = ?", Q, strings.Join(cols, sep), Q)
-	values = []interface{}{
-		tmp, &Boolean, &Text, &Int64, &Uint,
-	}
-	err = dORM.Raw(query, 1).QueryRow(values...)
-	throwFailNow(t, err)
-
-	for _, col := range cols {
-		switch col {
-		case "id":
-			throwFail(t, AssertIs(tmp.Id, data_values[col]))
-		case "char":
-			c := tmp.Char
-			throwFail(t, AssertIs(*c, data_values[col]))
-		case "date":
-			v := tmp.Date.In(DefaultTimeLoc)
-			value := data_values[col].(time.Time).In(DefaultTimeLoc)
-			throwFail(t, AssertIs(v, value, test_Date))
-		case "datetime":
-			v := tmp.DateTime.In(DefaultTimeLoc)
-			value := data_values[col].(time.Time).In(DefaultTimeLoc)
-			throwFail(t, AssertIs(v, value, test_DateTime))
-		case "boolean":
-			throwFail(t, AssertIs(Boolean, data_values[col]))
-		case "text":
-			throwFail(t, AssertIs(Text, data_values[col]))
-		case "int64":
-			throwFail(t, AssertIs(Int64, data_values[col]))
-		case "uint":
-			throwFail(t, AssertIs(Uint, data_values[col]))
-		}
-	}
-
 	var (
 		uid    int
 		status *int
@@ -1381,7 +1423,7 @@ func TestRawQueryRow(t *testing.T) {
 	)
 
 	cols = []string{
-		"id", "status", "profile_id",
+		"id", "Status", "profile_id",
 	}
 	query = fmt.Sprintf("SELECT %s%s%s FROM %suser%s WHERE id = ?", Q, strings.Join(cols, sep), Q, Q, Q)
 	err = dORM.Raw(query, 4).QueryRow(&uid, &status, &pid)
@@ -1394,22 +1436,13 @@ func TestRawQueryRow(t *testing.T) {
 func TestQueryRows(t *testing.T) {
 	Q := dDbBaser.TableQuote()
 
-	cols := []string{
-		"id", "boolean", "char", "text", "date", "datetime", "byte", "rune", "int", "int8", "int16", "int32",
-		"int64", "uint", "uint8", "uint16", "uint32", "uint64", "float32", "float64", "decimal",
-	}
-
 	var datas []*Data
-	var dids []int
 
-	sep := fmt.Sprintf("%s, %s", Q, Q)
-	query := fmt.Sprintf("SELECT %s%s%s, id FROM %sdata%s", Q, strings.Join(cols, sep), Q, Q, Q)
-	num, err := dORM.Raw(query).QueryRows(&datas, &dids)
+	query := fmt.Sprintf("SELECT * FROM %sdata%s", Q, Q)
+	num, err := dORM.Raw(query).QueryRows(&datas)
 	throwFailNow(t, err)
 	throwFailNow(t, AssertIs(num, 1))
 	throwFailNow(t, AssertIs(len(datas), 1))
-	throwFailNow(t, AssertIs(len(dids), 1))
-	throwFailNow(t, AssertIs(dids[0], 1))
 
 	ind := reflect.Indirect(reflect.ValueOf(datas[0]))
 
@@ -1427,97 +1460,50 @@ func TestQueryRows(t *testing.T) {
 		throwFail(t, AssertIs(vu == value, true), value, vu)
 	}
 
-	type Tmp struct {
-		Id      int
-		Name    string
-		Skiped0 string `orm:"-"`
-		Pid     *int
-		Skiped1 Data
-		Skiped2 *Data
+	var datas2 []Data
+
+	query = fmt.Sprintf("SELECT * FROM %sdata%s", Q, Q)
+	num, err = dORM.Raw(query).QueryRows(&datas2)
+	throwFailNow(t, err)
+	throwFailNow(t, AssertIs(num, 1))
+	throwFailNow(t, AssertIs(len(datas2), 1))
+
+	ind = reflect.Indirect(reflect.ValueOf(datas2[0]))
+
+	for name, value := range Data_Values {
+		e := ind.FieldByName(name)
+		vu := e.Interface()
+		switch name {
+		case "Date":
+			vu = vu.(time.Time).In(DefaultTimeLoc).Format(test_Date)
+			value = value.(time.Time).In(DefaultTimeLoc).Format(test_Date)
+		case "DateTime":
+			vu = vu.(time.Time).In(DefaultTimeLoc).Format(test_DateTime)
+			value = value.(time.Time).In(DefaultTimeLoc).Format(test_DateTime)
+		}
+		throwFail(t, AssertIs(vu == value, true), value, vu)
 	}
 
-	var (
-		ids         []int
-		userNames   []string
-		profileIds1 []int
-		profileIds2 []*int
-		createds    []time.Time
-		updateds    []time.Time
-		tmps1       []*Tmp
-		tmps2       []Tmp
-	)
-	cols = []string{
-		"id", "user_name", "profile_id", "profile_id", "id", "user_name", "profile_id", "id", "user_name", "profile_id", "created", "updated",
-	}
-	query = fmt.Sprintf("SELECT %s%s%s FROM %suser%s ORDER BY id", Q, strings.Join(cols, sep), Q, Q, Q)
-	num, err = dORM.Raw(query).QueryRows(&ids, &userNames, &profileIds1, &profileIds2, &tmps1, &tmps2, &createds, &updateds)
+	var ids []int
+	var usernames []string
+	query = fmt.Sprintf("SELECT %sid%s, %suser_name%s FROM %suser%s ORDER BY %sid%s ASC", Q, Q, Q, Q, Q, Q, Q, Q)
+	num, err = dORM.Raw(query).QueryRows(&ids, &usernames)
 	throwFailNow(t, err)
 	throwFailNow(t, AssertIs(num, 3))
-
-	var users []User
-	dORM.QueryTable("user").OrderBy("Id").All(&users)
-
-	for i := 0; i < 3; i++ {
-		id := ids[i]
-		name := userNames[i]
-		pid1 := profileIds1[i]
-		pid2 := profileIds2[i]
-		created := createds[i]
-		updated := updateds[i]
-
-		user := users[i]
-		throwFailNow(t, AssertIs(id, user.Id))
-		throwFailNow(t, AssertIs(name, user.UserName))
-		if user.Profile != nil {
-			throwFailNow(t, AssertIs(pid1, user.Profile.Id))
-			throwFailNow(t, AssertIs(*pid2, user.Profile.Id))
-		} else {
-			throwFailNow(t, AssertIs(pid1, 0))
-			throwFailNow(t, AssertIs(pid2, nil))
-		}
-		throwFailNow(t, AssertIs(created, user.Created, test_Date))
-		throwFailNow(t, AssertIs(updated, user.Updated, test_DateTime))
-
-		tmp := tmps1[i]
-		tmp1 := *tmp
-		throwFailNow(t, AssertIs(tmp1.Id, user.Id))
-		throwFailNow(t, AssertIs(tmp1.Name, user.UserName))
-		if user.Profile != nil {
-			pid := tmp1.Pid
-			throwFailNow(t, AssertIs(*pid, user.Profile.Id))
-		} else {
-			throwFailNow(t, AssertIs(tmp1.Pid, nil))
-		}
-
-		tmp2 := tmps2[i]
-		throwFailNow(t, AssertIs(tmp2.Id, user.Id))
-		throwFailNow(t, AssertIs(tmp2.Name, user.UserName))
-		if user.Profile != nil {
-			pid := tmp2.Pid
-			throwFailNow(t, AssertIs(*pid, user.Profile.Id))
-		} else {
-			throwFailNow(t, AssertIs(tmp2.Pid, nil))
-		}
-	}
-
-	type Sec struct {
-		Id   int
-		Name string
-	}
-
-	var tmp []*Sec
-	query = fmt.Sprintf("SELECT NULL, NULL FROM %suser%s LIMIT 1", Q, Q)
-	num, err = dORM.Raw(query).QueryRows(&tmp)
-	throwFail(t, err)
-	throwFail(t, AssertIs(num, 1))
-	throwFail(t, AssertIs(tmp[0], nil))
+	throwFailNow(t, AssertIs(len(ids), 3))
+	throwFailNow(t, AssertIs(ids[0], 2))
+	throwFailNow(t, AssertIs(usernames[0], "slene"))
+	throwFailNow(t, AssertIs(ids[1], 3))
+	throwFailNow(t, AssertIs(usernames[1], "astaxie"))
+	throwFailNow(t, AssertIs(ids[2], 4))
+	throwFailNow(t, AssertIs(usernames[2], "nobody"))
 }
 
 func TestRawValues(t *testing.T) {
 	Q := dDbBaser.TableQuote()
 
 	var maps []Params
-	query := fmt.Sprintf("SELECT %suser_name%s FROM %suser%s WHERE %sstatus%s = ?", Q, Q, Q, Q, Q, Q)
+	query := fmt.Sprintf("SELECT %suser_name%s FROM %suser%s WHERE %sStatus%s = ?", Q, Q, Q, Q, Q, Q)
 	num, err := dORM.Raw(query, 1).Values(&maps)
 	throwFail(t, err)
 	throwFail(t, AssertIs(num, 1))
@@ -1669,6 +1655,31 @@ func TestDelete(t *testing.T) {
 	num, err = qs.Filter("user_name", "slene").Filter("profile__isnull", true).Count()
 	throwFail(t, err)
 	throwFail(t, AssertIs(num, 1))
+
+	qs = dORM.QueryTable("comment")
+	num, err = qs.Count()
+	throwFail(t, err)
+	throwFail(t, AssertIs(num, 6))
+
+	qs = dORM.QueryTable("post")
+	num, err = qs.Filter("Id", 3).Delete()
+	throwFail(t, err)
+	throwFail(t, AssertIs(num, 1))
+
+	qs = dORM.QueryTable("comment")
+	num, err = qs.Count()
+	throwFail(t, err)
+	throwFail(t, AssertIs(num, 4))
+
+	qs = dORM.QueryTable("comment")
+	num, err = qs.Filter("Post__User", 3).Delete()
+	throwFail(t, err)
+	throwFail(t, AssertIs(num, 3))
+
+	qs = dORM.QueryTable("comment")
+	num, err = qs.Count()
+	throwFail(t, err)
+	throwFail(t, AssertIs(num, 1))
 }
 
 func TestTransaction(t *testing.T) {
@@ -1723,4 +1734,42 @@ func TestTransaction(t *testing.T) {
 	throwFail(t, err)
 	throwFail(t, AssertIs(num, 1))
 
+}
+
+func TestReadOrCreate(t *testing.T) {
+	u := &User{
+		UserName: "Kyle",
+		Email:    "kylemcc@gmail.com",
+		Password: "other_pass",
+		Status:   7,
+		IsStaff:  false,
+		IsActive: true,
+	}
+
+	created, pk, err := dORM.ReadOrCreate(u, "UserName")
+	throwFail(t, err)
+	throwFail(t, AssertIs(created, true))
+	throwFail(t, AssertIs(u.UserName, "Kyle"))
+	throwFail(t, AssertIs(u.Email, "kylemcc@gmail.com"))
+	throwFail(t, AssertIs(u.Password, "other_pass"))
+	throwFail(t, AssertIs(u.Status, 7))
+	throwFail(t, AssertIs(u.IsStaff, false))
+	throwFail(t, AssertIs(u.IsActive, true))
+	throwFail(t, AssertIs(u.Created.In(DefaultTimeLoc), u.Created.In(DefaultTimeLoc), test_Date))
+	throwFail(t, AssertIs(u.Updated.In(DefaultTimeLoc), u.Updated.In(DefaultTimeLoc), test_DateTime))
+
+	nu := &User{UserName: u.UserName, Email: "someotheremail@gmail.com"}
+	created, pk, err = dORM.ReadOrCreate(nu, "UserName")
+	throwFail(t, err)
+	throwFail(t, AssertIs(created, false))
+	throwFail(t, AssertIs(nu.Id, u.Id))
+	throwFail(t, AssertIs(pk, u.Id))
+	throwFail(t, AssertIs(nu.UserName, u.UserName))
+	throwFail(t, AssertIs(nu.Email, u.Email)) // should contain the value in the table, not the one specified above
+	throwFail(t, AssertIs(nu.Password, u.Password))
+	throwFail(t, AssertIs(nu.Status, u.Status))
+	throwFail(t, AssertIs(nu.IsStaff, u.IsStaff))
+	throwFail(t, AssertIs(nu.IsActive, u.IsActive))
+
+	dORM.Delete(u)
 }

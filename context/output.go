@@ -1,3 +1,9 @@
+// Beego (http://beego.me/)
+// @description beego is an open-source, high-performance web framework for the Go programming language.
+// @link        http://github.com/astaxie/beego for the canonical source repository
+// @license     http://github.com/astaxie/beego/blob/master/LICENSE
+// @authors     astaxie
+
 package context
 
 import (
@@ -77,39 +83,77 @@ func (output *BeegoOutput) Cookie(name string, value string, others ...interface
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "%s=%s", sanitizeName(name), sanitizeValue(value))
 	if len(others) > 0 {
-		switch others[0].(type) {
+		switch v := others[0].(type) {
 		case int:
-			if others[0].(int) > 0 {
-				fmt.Fprintf(&b, "; Max-Age=%d", others[0].(int))
-			} else if others[0].(int) < 0 {
+			if v > 0 {
+				fmt.Fprintf(&b, "; Max-Age=%d", v)
+			} else if v < 0 {
 				fmt.Fprintf(&b, "; Max-Age=0")
 			}
 		case int64:
-			if others[0].(int64) > 0 {
-				fmt.Fprintf(&b, "; Max-Age=%d", others[0].(int64))
-			} else if others[0].(int64) < 0 {
+			if v > 0 {
+				fmt.Fprintf(&b, "; Max-Age=%d", v)
+			} else if v < 0 {
 				fmt.Fprintf(&b, "; Max-Age=0")
 			}
 		case int32:
-			if others[0].(int32) > 0 {
-				fmt.Fprintf(&b, "; Max-Age=%d", others[0].(int32))
-			} else if others[0].(int32) < 0 {
+			if v > 0 {
+				fmt.Fprintf(&b, "; Max-Age=%d", v)
+			} else if v < 0 {
 				fmt.Fprintf(&b, "; Max-Age=0")
 			}
 		}
 	}
+
+	// the settings below
+	// Path, Domain, Secure, HttpOnly
+	// can use nil skip set
+
+	// default "/"
 	if len(others) > 1 {
-		fmt.Fprintf(&b, "; Path=%s", sanitizeValue(others[1].(string)))
+		if v, ok := others[1].(string); ok && len(v) > 0 {
+			fmt.Fprintf(&b, "; Path=%s", sanitizeValue(v))
+		}
+	} else {
+		fmt.Fprintf(&b, "; Path=%s", "/")
 	}
+
+	// default empty
 	if len(others) > 2 {
-		fmt.Fprintf(&b, "; Domain=%s", sanitizeValue(others[2].(string)))
+		if v, ok := others[2].(string); ok && len(v) > 0 {
+			fmt.Fprintf(&b, "; Domain=%s", sanitizeValue(v))
+		}
 	}
+
+	// default empty
 	if len(others) > 3 {
-		fmt.Fprintf(&b, "; Secure")
+		var secure bool
+		switch v := others[3].(type) {
+		case bool:
+			secure = v
+		default:
+			if others[3] != nil {
+				secure = true
+			}
+		}
+		if secure {
+			fmt.Fprintf(&b, "; Secure")
+		}
 	}
+
+	// default false. for session cookie default true
+	httponly := false
 	if len(others) > 4 {
+		if v, ok := others[4].(bool); ok && v {
+			// HttpOnly = true
+			httponly = true
+		}
+	}
+
+	if httponly {
 		fmt.Fprintf(&b, "; HttpOnly")
 	}
+
 	output.Context.ResponseWriter.Header().Add("Set-Cookie", b.String())
 }
 
@@ -193,10 +237,14 @@ func (output *BeegoOutput) Xml(data interface{}, hasIndent bool) error {
 
 // Download forces response for download file.
 // it prepares the download response header automatically.
-func (output *BeegoOutput) Download(file string) {
+func (output *BeegoOutput) Download(file string, filename ...string) {
 	output.Header("Content-Description", "File Transfer")
 	output.Header("Content-Type", "application/octet-stream")
-	output.Header("Content-Disposition", "attachment; filename="+filepath.Base(file))
+	if len(filename) > 0 && filename[0] != "" {
+		output.Header("Content-Disposition", "attachment; filename="+filename[0])
+	} else {
+		output.Header("Content-Disposition", "attachment; filename="+filepath.Base(file))
+	}
 	output.Header("Content-Transfer-Encoding", "binary")
 	output.Header("Expires", "0")
 	output.Header("Cache-Control", "must-revalidate")

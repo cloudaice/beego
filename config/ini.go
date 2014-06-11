@@ -1,3 +1,9 @@
+// Beego (http://beego.me/)
+// @description beego is an open-source, high-performance web framework for the Go programming language.
+// @link        http://github.com/astaxie/beego for the canonical source repository
+// @license     http://github.com/astaxie/beego/blob/master/LICENSE
+// @authors     astaxie
+
 package config
 
 import (
@@ -144,6 +150,11 @@ func (c *IniConfigContainer) Float(key string) (float64, error) {
 func (c *IniConfigContainer) String(key string) string {
 	key = strings.ToLower(key)
 	return c.getdata(key)
+}
+
+// Strings returns the []string value for a given key.
+func (c *IniConfigContainer) Strings(key string) []string {
+	return strings.Split(c.String(key), ";")
 }
 
 // WriteValue writes a new value for key.

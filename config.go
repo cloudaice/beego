@@ -1,6 +1,13 @@
+// Beego (http://beego.me/)
+// @description beego is an open-source, high-performance web framework for the Go programming language.
+// @link        http://github.com/astaxie/beego for the canonical source repository
+// @license     http://github.com/astaxie/beego/blob/master/LICENSE
+// @authors     astaxie
+
 package beego
 
 import (
+	"fmt"
 	"html/template"
 	"os"
 	"path/filepath"
@@ -11,12 +18,14 @@ import (
 	"github.com/astaxie/beego/config"
 	"github.com/astaxie/beego/logs"
 	"github.com/astaxie/beego/session"
+	"github.com/astaxie/beego/utils"
 )
 
 var (
 	BeeApp                 *App // beego application
 	AppName                string
 	AppPath                string
+	workPath               string
 	AppConfigPath          string
 	StaticDir              map[string]string
 	TemplateCache          map[string]*template.Template // template caching map
@@ -40,6 +49,7 @@ var (
 	SessionHashFunc        string           // session hash generation func.
 	SessionHashKey         string           // session hash salt string.
 	SessionCookieLifeTime  int              // the life time of session id in cookie.
+	SessionAutoSetCookie   bool             // auto setcookie
 	UseFcgi                bool
 	MaxMemory              int64
 	EnableGzip             bool // flag of enable gzip
@@ -57,15 +67,28 @@ var (
 	EnableAdmin            bool   // flag of enable admin module to log every request info.
 	AdminHttpAddr          string // http server configurations for admin module.
 	AdminHttpPort          int
+	FlashName              string // name of the flash variable found in response header and cookie
+	FlashSeperator         string // used to seperate flash key:value
 )
 
 func init() {
 	// create beego application
 	BeeApp = NewApp()
 
+	workPath, _ = os.Getwd()
+	workPath, _ = filepath.Abs(workPath)
 	// initialize default configurations
 	AppPath, _ = filepath.Abs(filepath.Dir(os.Args[0]))
-	os.Chdir(AppPath)
+
+	AppConfigPath = filepath.Join(AppPath, "conf", "app.conf")
+
+	if workPath != AppPath {
+		if utils.FileExists(AppConfigPath) {
+			os.Chdir(AppPath)
+		} else {
+			AppConfigPath = filepath.Join(workPath, "conf", "app.conf")
+		}
+	}
 
 	StaticDir = make(map[string]string)
 	StaticDir["/static"] = "static"
@@ -96,14 +119,13 @@ func init() {
 	SessionHashFunc = "sha1"
 	SessionHashKey = "beegoserversessionkey"
 	SessionCookieLifeTime = 0 //set cookie default is the brower life
+	SessionAutoSetCookie = true
 
 	UseFcgi = false
 
 	MaxMemory = 1 << 26 //64MB
 
 	EnableGzip = false
-
-	AppConfigPath = filepath.Join(AppPath, "conf", "app.conf")
 
 	HttpServerTimeOut = 0
 
@@ -121,13 +143,19 @@ func init() {
 	AdminHttpAddr = "127.0.0.1"
 	AdminHttpPort = 8088
 
+	FlashName = "BEEGO_FLASH"
+	FlashSeperator = "BEEGOFLASH"
+
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	// init BeeLogger
 	BeeLogger = logs.NewLogger(10000)
-	BeeLogger.SetLogger("console", "")
+	err := BeeLogger.SetLogger("console", "")
+	if err != nil {
+		fmt.Println("init console log error:", err)
+	}
 
-	err := ParseConfig()
+	err = ParseConfig()
 	if err != nil && !os.IsNotExist(err) {
 		// for init if doesn't have app.conf will not panic
 		Info(err)
@@ -139,6 +167,7 @@ func init() {
 func ParseConfig() (err error) {
 	AppConfig, err = config.NewConfig("ini", AppConfigPath)
 	if err != nil {
+		AppConfig = config.NewFakeConfig()
 		return err
 	} else {
 		HttpAddr = AppConfig.String("HttpAddr")
@@ -268,6 +297,14 @@ func ParseConfig() (err error) {
 			BeegoServerName = serverName
 		}
 
+		if flashname := AppConfig.String("FlashName"); flashname != "" {
+			FlashName = flashname
+		}
+
+		if flashseperator := AppConfig.String("FlashSeperator"); flashseperator != "" {
+			FlashSeperator = flashseperator
+		}
+
 		if sd := AppConfig.String("StaticDir"); sd != "" {
 			for k := range StaticDir {
 				delete(StaticDir, k)
@@ -275,9 +312,9 @@ func ParseConfig() (err error) {
 			sds := strings.Fields(sd)
 			for _, v := range sds {
 				if url2fsmap := strings.SplitN(v, ":", 2); len(url2fsmap) == 2 {
-					StaticDir["/"+url2fsmap[0]] = url2fsmap[1]
+					StaticDir["/"+strings.TrimRight(url2fsmap[0], "/")] = url2fsmap[1]
 				} else {
-					StaticDir["/"+url2fsmap[0]] = url2fsmap[0]
+					StaticDir["/"+strings.TrimRight(url2fsmap[0], "/")] = url2fsmap[0]
 				}
 			}
 		}

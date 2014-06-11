@@ -1,3 +1,9 @@
+// Beego (http://beego.me/)
+// @description beego is an open-source, high-performance web framework for the Go programming language.
+// @link        http://github.com/astaxie/beego for the canonical source repository
+// @license     http://github.com/astaxie/beego/blob/master/LICENSE
+// @authors     astaxie
+
 package session
 
 import (
@@ -5,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -17,6 +24,7 @@ var (
 	gcmaxlifetime int64
 )
 
+// File session store
 type FileSessionStore struct {
 	f      *os.File
 	sid    string
@@ -24,6 +32,7 @@ type FileSessionStore struct {
 	values map[interface{}]interface{}
 }
 
+// Set value to file session
 func (fs *FileSessionStore) Set(key, value interface{}) error {
 	fs.lock.Lock()
 	defer fs.lock.Unlock()
@@ -31,6 +40,7 @@ func (fs *FileSessionStore) Set(key, value interface{}) error {
 	return nil
 }
 
+// Get value from file session
 func (fs *FileSessionStore) Get(key interface{}) interface{} {
 	fs.lock.RLock()
 	defer fs.lock.RUnlock()
@@ -39,9 +49,9 @@ func (fs *FileSessionStore) Get(key interface{}) interface{} {
 	} else {
 		return nil
 	}
-	return nil
 }
 
+// Delete value in file session by given key
 func (fs *FileSessionStore) Delete(key interface{}) error {
 	fs.lock.Lock()
 	defer fs.lock.Unlock()
@@ -49,6 +59,7 @@ func (fs *FileSessionStore) Delete(key interface{}) error {
 	return nil
 }
 
+// Clean all values in file session
 func (fs *FileSessionStore) Flush() error {
 	fs.lock.Lock()
 	defer fs.lock.Unlock()
@@ -56,13 +67,15 @@ func (fs *FileSessionStore) Flush() error {
 	return nil
 }
 
+// Get file session store id
 func (fs *FileSessionStore) SessionID() string {
 	return fs.sid
 }
 
-func (fs *FileSessionStore) SessionRelease() {
+// Write file session to local file with Gob string
+func (fs *FileSessionStore) SessionRelease(w http.ResponseWriter) {
 	defer fs.f.Close()
-	b, err := encodeGob(fs.values)
+	b, err := EncodeGob(fs.values)
 	if err != nil {
 		return
 	}
@@ -71,18 +84,28 @@ func (fs *FileSessionStore) SessionRelease() {
 	fs.f.Write(b)
 }
 
+// File session provider
 type FileProvider struct {
+	lock        sync.RWMutex
 	maxlifetime int64
 	savePath    string
 }
 
+// Init file session provider.
+// savePath sets the session files path.
 func (fp *FileProvider) SessionInit(maxlifetime int64, savePath string) error {
 	fp.maxlifetime = maxlifetime
 	fp.savePath = savePath
 	return nil
 }
 
+// Read file session by sid.
+// if file is not exist, create it.
+// the file path is generated from sid string.
 func (fp *FileProvider) SessionRead(sid string) (SessionStore, error) {
+	filepder.lock.Lock()
+	defer filepder.lock.Unlock()
+
 	err := os.MkdirAll(path.Join(fp.savePath, string(sid[0]), string(sid[1])), 0777)
 	if err != nil {
 		println(err.Error())
@@ -105,7 +128,7 @@ func (fp *FileProvider) SessionRead(sid string) (SessionStore, error) {
 	if len(b) == 0 {
 		kv = make(map[interface{}]interface{})
 	} else {
-		kv, err = decodeGob(b)
+		kv, err = DecodeGob(b)
 		if err != nil {
 			return nil, err
 		}
@@ -116,7 +139,12 @@ func (fp *FileProvider) SessionRead(sid string) (SessionStore, error) {
 	return ss, nil
 }
 
+// Check file session exist.
+// it checkes the file named from sid exist or not.
 func (fp *FileProvider) SessionExist(sid string) bool {
+	filepder.lock.Lock()
+	defer filepder.lock.Unlock()
+
 	_, err := os.Stat(path.Join(fp.savePath, string(sid[0]), string(sid[1]), sid))
 	if err == nil {
 		return true
@@ -125,16 +153,25 @@ func (fp *FileProvider) SessionExist(sid string) bool {
 	}
 }
 
+// Remove all files in this save path
 func (fp *FileProvider) SessionDestroy(sid string) error {
-	os.Remove(path.Join(fp.savePath))
+	filepder.lock.Lock()
+	defer filepder.lock.Unlock()
+	os.Remove(path.Join(fp.savePath, string(sid[0]), string(sid[1]), sid))
 	return nil
 }
 
+// Recycle files in save path
 func (fp *FileProvider) SessionGC() {
+	filepder.lock.Lock()
+	defer filepder.lock.Unlock()
+
 	gcmaxlifetime = fp.maxlifetime
 	filepath.Walk(fp.savePath, gcpath)
 }
 
+// Get active file session number.
+// it walks save path to count files.
 func (fp *FileProvider) SessionAll() int {
 	a := &activeSession{}
 	err := filepath.Walk(fp.savePath, func(path string, f os.FileInfo, err error) error {
@@ -147,7 +184,12 @@ func (fp *FileProvider) SessionAll() int {
 	return a.total
 }
 
+// Generate new sid for file session.
+// it delete old file and create new file named from new sid.
 func (fp *FileProvider) SessionRegenerate(oldsid, sid string) (SessionStore, error) {
+	filepder.lock.Lock()
+	defer filepder.lock.Unlock()
+
 	err := os.MkdirAll(path.Join(fp.savePath, string(oldsid[0]), string(oldsid[1])), 0777)
 	if err != nil {
 		println(err.Error())
@@ -185,7 +227,7 @@ func (fp *FileProvider) SessionRegenerate(oldsid, sid string) (SessionStore, err
 	if len(b) == 0 {
 		kv = make(map[interface{}]interface{})
 	} else {
-		kv, err = decodeGob(b)
+		kv, err = DecodeGob(b)
 		if err != nil {
 			return nil, err
 		}
@@ -196,6 +238,7 @@ func (fp *FileProvider) SessionRegenerate(oldsid, sid string) (SessionStore, err
 	return ss, nil
 }
 
+// remove file in save path if expired
 func gcpath(path string, info os.FileInfo, err error) error {
 	if err != nil {
 		return err

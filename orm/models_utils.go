@@ -1,16 +1,25 @@
+// Beego (http://beego.me/)
+// @description beego is an open-source, high-performance web framework for the Go programming language.
+// @link        http://github.com/astaxie/beego for the canonical source repository
+// @license     http://github.com/astaxie/beego/blob/master/LICENSE
+// @authors     slene
+
 package orm
 
 import (
+	"database/sql"
 	"fmt"
 	"reflect"
 	"strings"
 	"time"
 )
 
+// get reflect.Type name with package path.
 func getFullName(typ reflect.Type) string {
 	return typ.PkgPath() + "." + typ.Name()
 }
 
+// get table name. method, or field name. auto snaked.
 func getTableName(val reflect.Value) string {
 	ind := reflect.Indirect(val)
 	fun := val.MethodByName("TableName")
@@ -26,6 +35,7 @@ func getTableName(val reflect.Value) string {
 	return snakeString(ind.Type().Name())
 }
 
+// get table engine, mysiam or innodb.
 func getTableEngine(val reflect.Value) string {
 	fun := val.MethodByName("TableEngine")
 	if fun.IsValid() {
@@ -40,6 +50,7 @@ func getTableEngine(val reflect.Value) string {
 	return ""
 }
 
+// get table index from method.
 func getTableIndex(val reflect.Value) [][]string {
 	fun := val.MethodByName("TableIndex")
 	if fun.IsValid() {
@@ -56,6 +67,7 @@ func getTableIndex(val reflect.Value) [][]string {
 	return nil
 }
 
+// get table unique from method
 func getTableUnique(val reflect.Value) [][]string {
 	fun := val.MethodByName("TableUnique")
 	if fun.IsValid() {
@@ -72,8 +84,8 @@ func getTableUnique(val reflect.Value) [][]string {
 	return nil
 }
 
+// get snaked column name
 func getColumnName(ft int, addrField reflect.Value, sf reflect.StructField, col string) string {
-	col = strings.ToLower(col)
 	column := col
 	if col == "" {
 		column = snakeString(sf.Name)
@@ -89,6 +101,7 @@ func getColumnName(ft int, addrField reflect.Value, sf reflect.StructField, col 
 	return column
 }
 
+// return field type as type constant from reflect.Value
 func getFieldType(val reflect.Value) (ft int, err error) {
 	elm := reflect.Indirect(val)
 	switch elm.Kind() {
@@ -114,12 +127,18 @@ func getFieldType(val reflect.Value) (ft int, err error) {
 		ft = TypeBooleanField
 	case reflect.String:
 		ft = TypeCharField
-	case reflect.Invalid:
 	default:
-		if elm.CanInterface() {
-			if _, ok := elm.Interface().(time.Time); ok {
-				ft = TypeDateTimeField
-			}
+		switch elm.Interface().(type) {
+		case sql.NullInt64:
+			ft = TypeBigIntegerField
+		case sql.NullFloat64:
+			ft = TypeFloatField
+		case sql.NullBool:
+			ft = TypeBooleanField
+		case sql.NullString:
+			ft = TypeCharField
+		case time.Time:
+			ft = TypeDateTimeField
 		}
 	}
 	if ft&IsFieldType == 0 {
@@ -128,6 +147,7 @@ func getFieldType(val reflect.Value) (ft int, err error) {
 	return
 }
 
+// parse struct tag string
 func parseStructTag(data string, attrs *map[string]bool, tags *map[string]string) {
 	attr := make(map[string]bool)
 	tag := make(map[string]string)

@@ -1,35 +1,45 @@
+// Beego (http://beego.me/)
+// @description beego is an open-source, high-performance web framework for the Go programming language.
+// @link        http://github.com/astaxie/beego for the canonical source repository
+// @license     http://github.com/astaxie/beego/blob/master/LICENSE
+// @authors     slene
+
 package orm
 
 import (
 	"database/sql"
 	"fmt"
-	"os"
 	"reflect"
 	"sync"
 	"time"
 )
 
+// database driver constant int.
 type DriverType int
 
 const (
-	_ DriverType = iota
-	DR_MySQL
-	DR_Sqlite
-	DR_Oracle
-	DR_Postgres
+	_           DriverType = iota // int enum type
+	DR_MySQL                      // mysql
+	DR_Sqlite                     // sqlite
+	DR_Oracle                     // oracle
+	DR_Postgres                   // pgsql
 )
 
+// database driver string.
 type driver string
 
+// get type constant int of current driver..
 func (d driver) Type() DriverType {
 	a, _ := dataBaseCache.get(string(d))
 	return a.Driver
 }
 
+// get name of current driver
 func (d driver) Name() string {
 	return string(d)
 }
 
+// check driver iis implemented Driver interface or not.
 var _ Driver = new(driver)
 
 var (
@@ -47,11 +57,13 @@ var (
 	}
 )
 
+// database alias cacher.
 type _dbCache struct {
 	mux   sync.RWMutex
 	cache map[string]*alias
 }
 
+// add database alias with original name.
 func (ac *_dbCache) add(name string, al *alias) (added bool) {
 	ac.mux.Lock()
 	defer ac.mux.Unlock()
@@ -62,6 +74,7 @@ func (ac *_dbCache) add(name string, al *alias) (added bool) {
 	return
 }
 
+// get database alias if cached.
 func (ac *_dbCache) get(name string) (al *alias, ok bool) {
 	ac.mux.RLock()
 	defer ac.mux.RUnlock()
@@ -69,6 +82,7 @@ func (ac *_dbCache) get(name string) (al *alias, ok bool) {
 	return
 }
 
+// get default alias.
 func (ac *_dbCache) getDefault() (al *alias) {
 	al, _ = ac.get("default")
 	return
@@ -87,57 +101,29 @@ type alias struct {
 	Engine       string
 }
 
-// Setting the database connect params. Use the database driver self dataSource args.
-func RegisterDataBase(aliasName, driverName, dataSource string, params ...int) {
-	al := new(alias)
-	al.Name = aliasName
-	al.DriverName = driverName
-	al.DataSource = dataSource
-
-	var (
-		err error
-	)
-
-	if dr, ok := drivers[driverName]; ok {
-		al.DbBaser = dbBasers[dr]
-		al.Driver = dr
-	} else {
-		err = fmt.Errorf("driver name `%s` have not registered", driverName)
-		goto end
-	}
-
-	if dataBaseCache.add(aliasName, al) == false {
-		err = fmt.Errorf("db name `%s` already registered, cannot reuse", aliasName)
-		goto end
-	}
-
-	al.DB, err = sql.Open(driverName, dataSource)
-	if err != nil {
-		err = fmt.Errorf("register db `%s`, %s", aliasName, err.Error())
-		goto end
-	}
-
+func detectTZ(al *alias) {
 	// orm timezone system match database
 	// default use Local
 	al.TZ = time.Local
 
+	if al.DriverName == "sphinx" {
+		return
+	}
+
 	switch al.Driver {
 	case DR_MySQL:
-		row := al.DB.QueryRow("SELECT @@session.time_zone")
+		row := al.DB.QueryRow("SELECT TIMEDIFF(NOW(), UTC_TIMESTAMP)")
 		var tz string
 		row.Scan(&tz)
-		if tz == "SYSTEM" {
-			tz = ""
-			row = al.DB.QueryRow("SELECT @@system_time_zone")
-			row.Scan(&tz)
-			t, err := time.Parse("MST", tz)
-			if err == nil {
-				al.TZ = t.Location()
+		if len(tz) >= 8 {
+			if tz[0] != '-' {
+				tz = "+" + tz
 			}
-		} else {
-			t, err := time.Parse("-07:00", tz)
+			t, err := time.Parse("-07:00:00", tz)
 			if err == nil {
 				al.TZ = t.Location()
+			} else {
+				DebugLog.Printf("Detect DB timezone: %s %s\n", tz, err.Error())
 			}
 		}
 
@@ -163,8 +149,64 @@ func RegisterDataBase(aliasName, driverName, dataSource string, params ...int) {
 		loc, err := time.LoadLocation(tz)
 		if err == nil {
 			al.TZ = loc
+		} else {
+			DebugLog.Printf("Detect DB timezone: %s %s\n", tz, err.Error())
 		}
 	}
+}
+
+func addAliasWthDB(aliasName, driverName string, db *sql.DB) (*alias, error) {
+	al := new(alias)
+	al.Name = aliasName
+	al.DriverName = driverName
+	al.DB = db
+
+	if dr, ok := drivers[driverName]; ok {
+		al.DbBaser = dbBasers[dr]
+		al.Driver = dr
+	} else {
+		return nil, fmt.Errorf("driver name `%s` have not registered", driverName)
+	}
+
+	err := db.Ping()
+	if err != nil {
+		return nil, fmt.Errorf("register db Ping `%s`, %s", aliasName, err.Error())
+	}
+
+	if dataBaseCache.add(aliasName, al) == false {
+		return nil, fmt.Errorf("DataBase alias name `%s` already registered, cannot reuse", aliasName)
+	}
+
+	return al, nil
+}
+
+func AddAliasWthDB(aliasName, driverName string, db *sql.DB) error {
+	_, err := addAliasWthDB(aliasName, driverName, db)
+	return err
+}
+
+// Setting the database connect params. Use the database driver self dataSource args.
+func RegisterDataBase(aliasName, driverName, dataSource string, params ...int) error {
+	var (
+		err error
+		db  *sql.DB
+		al  *alias
+	)
+
+	db, err = sql.Open(driverName, dataSource)
+	if err != nil {
+		err = fmt.Errorf("register db `%s`, %s", aliasName, err.Error())
+		goto end
+	}
+
+	al, err = addAliasWthDB(aliasName, driverName, db)
+	if err != nil {
+		goto end
+	}
+
+	al.DataSource = dataSource
+
+	detectTZ(al)
 
 	for i, v := range params {
 		switch i {
@@ -175,39 +217,37 @@ func RegisterDataBase(aliasName, driverName, dataSource string, params ...int) {
 		}
 	}
 
-	err = al.DB.Ping()
-	if err != nil {
-		err = fmt.Errorf("register db `%s`, %s", aliasName, err.Error())
-		goto end
-	}
-
 end:
 	if err != nil {
-		fmt.Println(err.Error())
-		os.Exit(2)
+		if db != nil {
+			db.Close()
+		}
+		DebugLog.Println(err.Error())
 	}
+
+	return err
 }
 
 // Register a database driver use specify driver name, this can be definition the driver is which database type.
-func RegisterDriver(driverName string, typ DriverType) {
+func RegisterDriver(driverName string, typ DriverType) error {
 	if t, ok := drivers[driverName]; ok == false {
 		drivers[driverName] = typ
 	} else {
 		if t != typ {
-			fmt.Sprintf("driverName `%s` db driver already registered and is other type\n", driverName)
-			os.Exit(2)
+			return fmt.Errorf("driverName `%s` db driver already registered and is other type\n", driverName)
 		}
 	}
+	return nil
 }
 
 // Change the database default used timezone
-func SetDataBaseTZ(aliasName string, tz *time.Location) {
+func SetDataBaseTZ(aliasName string, tz *time.Location) error {
 	if al, ok := dataBaseCache.get(aliasName); ok {
 		al.TZ = tz
 	} else {
-		fmt.Sprintf("DataBase name `%s` not registered\n", aliasName)
-		os.Exit(2)
+		return fmt.Errorf("DataBase alias name `%s` not registered\n", aliasName)
 	}
+	return nil
 }
 
 // Change the max idle conns for *sql.DB, use specify database alias name
@@ -224,5 +264,21 @@ func SetMaxOpenConns(aliasName string, maxOpenConns int) {
 	// for tip go 1.2
 	if fun := reflect.ValueOf(al.DB).MethodByName("SetMaxOpenConns"); fun.IsValid() {
 		fun.Call([]reflect.Value{reflect.ValueOf(maxOpenConns)})
+	}
+}
+
+// Get *sql.DB from registered database by db alias name.
+// Use "default" as alias name if you not set.
+func GetDB(aliasNames ...string) (*sql.DB, error) {
+	var name string
+	if len(aliasNames) > 0 {
+		name = aliasNames[0]
+	} else {
+		name = "default"
+	}
+	if al, ok := dataBaseCache.get(name); ok {
+		return al.DB, nil
+	} else {
+		return nil, fmt.Errorf("DataBase of alias name `%s` not found\n", name)
 	}
 }

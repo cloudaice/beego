@@ -1,3 +1,9 @@
+// Beego (http://beego.me/)
+// @description beego is an open-source, high-performance web framework for the Go programming language.
+// @link        http://github.com/astaxie/beego for the canonical source repository
+// @license     http://github.com/astaxie/beego/blob/master/LICENSE
+// @authors     slene
+
 package orm
 
 import (
@@ -13,6 +19,7 @@ type Log struct {
 	*log.Logger
 }
 
+// set io.Writer to create a Logger.
 func NewLog(out io.Writer) *Log {
 	d := new(Log)
 	d.Logger = log.New(out, "[ORM]", 1e9)
@@ -40,6 +47,8 @@ func debugLogQueies(alias *alias, operaton, query string, t time.Time, err error
 	DebugLog.Println(con)
 }
 
+// statement query logger struct.
+// if dev mode, use stmtQueryLog, or use stmtQuerier.
 type stmtQueryLog struct {
 	alias *alias
 	query string
@@ -84,6 +93,8 @@ func newStmtQueryLog(alias *alias, stmt stmtQuerier, query string) stmtQuerier {
 	return d
 }
 
+// database query logger struct.
+// if dev mode, use dbQueryLog, or use dbQuerier.
 type dbQueryLog struct {
 	alias *alias
 	db    dbQuerier

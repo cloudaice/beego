@@ -1,3 +1,9 @@
+// Beego (http://beego.me/)
+// @description beego is an open-source, high-performance web framework for the Go programming language.
+// @link        http://github.com/astaxie/beego for the canonical source repository
+// @license     http://github.com/astaxie/beego/blob/master/LICENSE
+// @authors     slene
+
 package orm
 
 import (
@@ -9,6 +15,7 @@ import (
 
 var errSkipField = errors.New("skip field")
 
+// field info collection
 type fields struct {
 	pk            *fieldInfo
 	columns       map[string]*fieldInfo
@@ -23,6 +30,7 @@ type fields struct {
 	dbcols        []string
 }
 
+// add field info
 func (f *fields) Add(fi *fieldInfo) (added bool) {
 	if f.fields[fi.name] == nil && f.columns[fi.column] == nil {
 		f.columns[fi.column] = fi
@@ -49,14 +57,17 @@ func (f *fields) Add(fi *fieldInfo) (added bool) {
 	return true
 }
 
+// get field info by name
 func (f *fields) GetByName(name string) *fieldInfo {
 	return f.fields[name]
 }
 
+// get field info by column name
 func (f *fields) GetByColumn(column string) *fieldInfo {
 	return f.columns[column]
 }
 
+// get field info by string, name is prior
 func (f *fields) GetByAny(name string) (*fieldInfo, bool) {
 	if fi, ok := f.fields[name]; ok {
 		return fi, ok
@@ -70,6 +81,7 @@ func (f *fields) GetByAny(name string) (*fieldInfo, bool) {
 	return nil, false
 }
 
+// create new field info collection
 func newFields() *fields {
 	f := new(fields)
 	f.fields = make(map[string]*fieldInfo)
@@ -79,6 +91,7 @@ func newFields() *fields {
 	return f
 }
 
+// single field info
 type fieldInfo struct {
 	mi                  *modelInfo
 	fieldIndex          int
@@ -115,6 +128,7 @@ type fieldInfo struct {
 	onDelete            string
 }
 
+// new field info
 func newFieldInfo(mi *modelInfo, field reflect.Value, sf reflect.StructField) (fi *fieldInfo, err error) {
 	var (
 		tag       string

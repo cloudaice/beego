@@ -1,10 +1,18 @@
+// Beego (http://beego.me/)
+// @description beego is an open-source, high-performance web framework for the Go programming language.
+// @link        http://github.com/astaxie/beego for the canonical source repository
+// @license     http://github.com/astaxie/beego/blob/master/LICENSE
+// @authors     astaxie
+
 package beego
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"reflect"
 	"regexp"
 	"runtime"
@@ -27,10 +35,29 @@ const (
 	FinishRouter
 )
 
+const (
+	routerTypeBeego = iota
+	routerTypeRESTFul
+	routerTypeHandler
+)
+
 var (
 	// supported http methods.
-	HTTPMETHOD = []string{"get", "post", "put", "delete", "patch", "options", "head"}
+	HTTPMETHOD = []string{"get", "post", "put", "delete", "patch", "options", "head", "trace", "connect"}
+	// these beego.Controller's methods shouldn't reflect to AutoRouter
+	exceptMethod = []string{"Init", "Prepare", "Finish", "Render", "RenderString",
+		"RenderBytes", "Redirect", "Abort", "StopRun", "UrlFor", "ServeJson", "ServeJsonp",
+		"ServeXml", "Input", "ParseForm", "GetString", "GetStrings", "GetInt", "GetBool",
+		"GetFloat", "GetFile", "SaveToFile", "StartSession", "SetSession", "GetSession",
+		"DelSession", "SessionRegenerateID", "DestroySession", "IsAjax", "GetSecureCookie",
+		"SetSecureCookie", "XsrfToken", "CheckXsrfCookie", "XsrfFormHtml",
+		"GetControllerAndAction"}
 )
+
+// To append a slice's value into "exceptMethod", for controller's methods shouldn't reflect to AutoRouter
+func ExceptMethodAppend(action string) {
+	exceptMethod = append(exceptMethod, action)
+}
 
 type controllerInfo struct {
 	pattern        string
@@ -39,6 +66,10 @@ type controllerInfo struct {
 	controllerType reflect.Type
 	methods        map[string]string
 	hasMethod      bool
+	handler        http.Handler
+	runfunction    FilterFunc
+	routerType     int
+	isPrefix       bool
 }
 
 // ControllerRegistor containers registered router rules, controller handlers and filters.
@@ -71,13 +102,219 @@ func NewControllerRegistor() *ControllerRegistor {
 //	Add("/api",&RestController{},"get,post:ApiFunc")
 //	Add("/simple",&SimpleController{},"get:GetFunc;post:PostFunc")
 func (p *ControllerRegistor) Add(pattern string, c ControllerInterface, mappingMethods ...string) {
-	parts := strings.Split(pattern, "/")
+	j, params, parts := p.splitRoute(pattern)
+	reflectVal := reflect.ValueOf(c)
+	t := reflect.Indirect(reflectVal).Type()
+	methods := make(map[string]string)
+	if len(mappingMethods) > 0 {
+		semi := strings.Split(mappingMethods[0], ";")
+		for _, v := range semi {
+			colon := strings.Split(v, ":")
+			if len(colon) != 2 {
+				panic("method mapping format is invalid")
+			}
+			comma := strings.Split(colon[0], ",")
+			for _, m := range comma {
+				if m == "*" || utils.InSlice(strings.ToLower(m), HTTPMETHOD) {
+					if val := reflectVal.MethodByName(colon[1]); val.IsValid() {
+						methods[strings.ToLower(m)] = colon[1]
+					} else {
+						panic(colon[1] + " method doesn't exist in the controller " + t.Name())
+					}
+				} else {
+					panic(v + " is an invalid method mapping. Method doesn't exist " + m)
+				}
+			}
+		}
+	}
+	if j == 0 {
+		//now create the Route
+		route := &controllerInfo{}
+		route.pattern = pattern
+		route.controllerType = t
+		route.methods = methods
+		route.routerType = routerTypeBeego
+		if len(methods) > 0 {
+			route.hasMethod = true
+		}
+		p.fixrouters = append(p.fixrouters, route)
+	} else { // add regexp routers
+		//recreate the url pattern, with parameters replaced
+		//by regular expressions. then compile the regex
+		pattern = strings.Join(parts, "/")
+		regex, regexErr := regexp.Compile(pattern)
+		if regexErr != nil {
+			//TODO add error handling here to avoid panic
+			panic(regexErr)
+		}
 
+		//now create the Route
+
+		route := &controllerInfo{}
+		route.regex = regex
+		route.params = params
+		route.pattern = pattern
+		route.methods = methods
+		route.routerType = routerTypeBeego
+		if len(methods) > 0 {
+			route.hasMethod = true
+		}
+		route.controllerType = t
+		p.routers = append(p.routers, route)
+	}
+}
+
+// add get method
+// usage:
+//    Get("/", func(ctx *context.Context){
+//          ctx.Output.Body("hello world")
+//    })
+func (p *ControllerRegistor) Get(pattern string, f FilterFunc) {
+	p.AddMethod("get", pattern, f)
+}
+
+// add post method
+// usage:
+//    Post("/api", func(ctx *context.Context){
+//          ctx.Output.Body("hello world")
+//    })
+func (p *ControllerRegistor) Post(pattern string, f FilterFunc) {
+	p.AddMethod("post", pattern, f)
+}
+
+// add put method
+// usage:
+//    Put("/api/:id", func(ctx *context.Context){
+//          ctx.Output.Body("hello world")
+//    })
+func (p *ControllerRegistor) Put(pattern string, f FilterFunc) {
+	p.AddMethod("put", pattern, f)
+}
+
+// add delete method
+// usage:
+//    Delete("/api/:id", func(ctx *context.Context){
+//          ctx.Output.Body("hello world")
+//    })
+func (p *ControllerRegistor) Delete(pattern string, f FilterFunc) {
+	p.AddMethod("delete", pattern, f)
+}
+
+// add head method
+// usage:
+//    Head("/api/:id", func(ctx *context.Context){
+//          ctx.Output.Body("hello world")
+//    })
+func (p *ControllerRegistor) Head(pattern string, f FilterFunc) {
+	p.AddMethod("head", pattern, f)
+}
+
+// add patch method
+// usage:
+//    Patch("/api/:id", func(ctx *context.Context){
+//          ctx.Output.Body("hello world")
+//    })
+func (p *ControllerRegistor) Patch(pattern string, f FilterFunc) {
+	p.AddMethod("patch", pattern, f)
+}
+
+// add options method
+// usage:
+//    Options("/api/:id", func(ctx *context.Context){
+//          ctx.Output.Body("hello world")
+//    })
+func (p *ControllerRegistor) Options(pattern string, f FilterFunc) {
+	p.AddMethod("options", pattern, f)
+}
+
+// add all method
+// usage:
+//    Any("/api/:id", func(ctx *context.Context){
+//          ctx.Output.Body("hello world")
+//    })
+func (p *ControllerRegistor) Any(pattern string, f FilterFunc) {
+	p.AddMethod("*", pattern, f)
+}
+
+// add http method router
+// usage:
+//    AddMethod("get","/api/:id", func(ctx *context.Context){
+//          ctx.Output.Body("hello world")
+//    })
+func (p *ControllerRegistor) AddMethod(method, pattern string, f FilterFunc) {
+	if method != "*" && !utils.InSlice(strings.ToLower(method), HTTPMETHOD) {
+		panic("not support http method: " + method)
+	}
+	route := &controllerInfo{}
+	route.routerType = routerTypeRESTFul
+	route.runfunction = f
+	methods := make(map[string]string)
+	if method == "*" {
+		for _, val := range HTTPMETHOD {
+			methods[val] = val
+		}
+	} else {
+		methods[method] = method
+	}
+	route.methods = methods
+	paramnums, params, parts := p.splitRoute(pattern)
+	if paramnums == 0 {
+		//now create the Route
+		route.pattern = pattern
+		p.fixrouters = append(p.fixrouters, route)
+	} else {
+		//recreate the url pattern, with parameters replaced
+		//by regular expressions. then compile the regex
+		pattern = strings.Join(parts, "/")
+		regex, regexErr := regexp.Compile(pattern)
+		if regexErr != nil {
+			panic(regexErr)
+		}
+		//now create the Route
+		route.regex = regex
+		route.params = params
+		route.pattern = pattern
+		p.routers = append(p.routers, route)
+	}
+}
+
+func (p *ControllerRegistor) Handler(pattern string, h http.Handler, options ...interface{}) {
+	paramnums, params, parts := p.splitRoute(pattern)
+	route := &controllerInfo{}
+	route.routerType = routerTypeHandler
+	route.handler = h
+	if len(options) > 0 {
+		if v, ok := options[0].(bool); ok {
+			route.isPrefix = v
+		}
+	}
+	if paramnums == 0 {
+		route.pattern = pattern
+		p.fixrouters = append(p.fixrouters, route)
+	} else {
+		//recreate the url pattern, with parameters replaced
+		//by regular expressions. then compile the regex
+		pattern = strings.Join(parts, "/")
+		regex, regexErr := regexp.Compile(pattern)
+		if regexErr != nil {
+			panic(regexErr)
+		}
+		//now create the Route
+		route.regex = regex
+		route.params = params
+		route.pattern = pattern
+		p.routers = append(p.routers, route)
+	}
+}
+
+// analisys the patter to params & parts
+func (p *ControllerRegistor) splitRoute(pattern string) (paramnums int, params map[int]string, parts []string) {
+	parts = strings.Split(pattern, "/")
 	j := 0
-	params := make(map[int]string)
+	params = make(map[int]string)
 	for i, part := range parts {
 		if strings.HasPrefix(part, ":") {
-			expr := "(.+)"
+			expr := "(.*)"
 			//a user may choose to override the defult expression
 			// similar to expressjs: ‘/user/:id([0-9]+)’
 			if index := strings.Index(part, "("); index != -1 {
@@ -94,13 +331,17 @@ func (p *ControllerRegistor) Add(pattern string, c ControllerInterface, mappingM
 					expr = `([\w]+)`
 					part = part[:lindex]
 				}
+				//marth /user/:id! non-empty value
+			} else if part[len(part)-1] == '!' {
+				expr = `(.+)`
+				part = part[:len(part)-1]
 			}
 			params[j] = part
 			parts[i] = expr
 			j++
 		}
 		if strings.HasPrefix(part, "*") {
-			expr := "(.+)"
+			expr := "(.*)"
 			if part == "*.*" {
 				params[j] = ":path"
 				parts[i] = "([^.]+).([^.]+)"
@@ -155,71 +396,14 @@ func (p *ControllerRegistor) Add(pattern string, c ControllerInterface, mappingM
 			parts[i] = string(out)
 		}
 	}
-	reflectVal := reflect.ValueOf(c)
-	t := reflect.Indirect(reflectVal).Type()
-	methods := make(map[string]string)
-	if len(mappingMethods) > 0 {
-		semi := strings.Split(mappingMethods[0], ";")
-		for _, v := range semi {
-			colon := strings.Split(v, ":")
-			if len(colon) != 2 {
-				panic("method mapping format is invalid")
-			}
-			comma := strings.Split(colon[0], ",")
-			for _, m := range comma {
-				if m == "*" || utils.InSlice(strings.ToLower(m), HTTPMETHOD) {
-					if val := reflectVal.MethodByName(colon[1]); val.IsValid() {
-						methods[strings.ToLower(m)] = colon[1]
-					} else {
-						panic(colon[1] + " method doesn't exist in the controller " + t.Name())
-					}
-				} else {
-					panic(v + " is an invalid method mapping. Method doesn't exist " + m)
-				}
-			}
-		}
-	}
-	if j == 0 {
-		//now create the Route
-		route := &controllerInfo{}
-		route.pattern = pattern
-		route.controllerType = t
-		route.methods = methods
-		if len(methods) > 0 {
-			route.hasMethod = true
-		}
-		p.fixrouters = append(p.fixrouters, route)
-	} else { // add regexp routers
-		//recreate the url pattern, with parameters replaced
-		//by regular expressions. then compile the regex
-		pattern = strings.Join(parts, "/")
-		regex, regexErr := regexp.Compile(pattern)
-		if regexErr != nil {
-			//TODO add error handling here to avoid panic
-			panic(regexErr)
-			return
-		}
-
-		//now create the Route
-
-		route := &controllerInfo{}
-		route.regex = regex
-		route.params = params
-		route.pattern = pattern
-		route.methods = methods
-		if len(methods) > 0 {
-			route.hasMethod = true
-		}
-		route.controllerType = t
-		p.routers = append(p.routers, route)
-	}
+	return j, params, parts
 }
 
 // Add auto router to ControllerRegistor.
 // example beego.AddAuto(&MainContorlller{}),
 // MainController has method List and Page.
-// visit the url /main/list to exec List function
-// /main/page to exec Page function.
+// visit the url /main/list to execute List function
+// /main/page to execute Page function.
 func (p *ControllerRegistor) AddAuto(c ControllerInterface) {
 	p.enableAuto = true
 	reflectVal := reflect.ValueOf(c)
@@ -232,14 +416,43 @@ func (p *ControllerRegistor) AddAuto(c ControllerInterface) {
 		p.autoRouter[firstParam] = make(map[string]reflect.Type)
 	}
 	for i := 0; i < rt.NumMethod(); i++ {
-		p.autoRouter[firstParam][rt.Method(i).Name] = ct
+		if !utils.InSlice(rt.Method(i).Name, exceptMethod) {
+			p.autoRouter[firstParam][rt.Method(i).Name] = ct
+		}
+	}
+}
+
+// Add auto router to ControllerRegistor with prefix.
+// example beego.AddAutoPrefix("/admin",&MainContorlller{}),
+// MainController has method List and Page.
+// visit the url /admin/main/list to execute List function
+// /admin/main/page to execute Page function.
+func (p *ControllerRegistor) AddAutoPrefix(prefix string, c ControllerInterface) {
+	p.enableAuto = true
+	reflectVal := reflect.ValueOf(c)
+	rt := reflectVal.Type()
+	ct := reflect.Indirect(reflectVal).Type()
+	firstParam := strings.Trim(prefix, "/") + "/" + strings.ToLower(strings.TrimSuffix(ct.Name(), "Controller"))
+	if _, ok := p.autoRouter[firstParam]; ok {
+		return
+	} else {
+		p.autoRouter[firstParam] = make(map[string]reflect.Type)
+	}
+	for i := 0; i < rt.NumMethod(); i++ {
+		if !utils.InSlice(rt.Method(i).Name, exceptMethod) {
+			p.autoRouter[firstParam][rt.Method(i).Name] = ct
+		}
 	}
 }
 
 // [Deprecated] use InsertFilter.
 // Add FilterFunc with pattern for action.
-func (p *ControllerRegistor) AddFilter(pattern, action string, filter FilterFunc) {
-	mr := buildFilter(pattern, filter)
+func (p *ControllerRegistor) AddFilter(pattern, action string, filter FilterFunc) error {
+	mr, err := buildFilter(pattern, filter)
+	if err != nil {
+		return err
+	}
+
 	switch action {
 	case "BeforeRouter":
 		p.filters[BeforeRouter] = append(p.filters[BeforeRouter], mr)
@@ -253,13 +466,18 @@ func (p *ControllerRegistor) AddFilter(pattern, action string, filter FilterFunc
 		p.filters[FinishRouter] = append(p.filters[FinishRouter], mr)
 	}
 	p.enableFilter = true
+	return nil
 }
 
 // Add a FilterFunc with pattern rule and action constant.
-func (p *ControllerRegistor) InsertFilter(pattern string, pos int, filter FilterFunc) {
-	mr := buildFilter(pattern, filter)
+func (p *ControllerRegistor) InsertFilter(pattern string, pos int, filter FilterFunc) error {
+	mr, err := buildFilter(pattern, filter)
+	if err != nil {
+		return err
+	}
 	p.filters[pos] = append(p.filters[pos], mr)
 	p.enableFilter = true
+	return nil
 }
 
 // UrlFor does another controller handler in this request function.
@@ -444,6 +662,7 @@ func (p *ControllerRegistor) ServeHTTP(rw http.ResponseWriter, r *http.Request) 
 	var runrouter reflect.Type
 	var findrouter bool
 	var runMethod string
+	var routerInfo *controllerInfo
 	params := make(map[string]string)
 
 	w := &responseWriter{writer: rw}
@@ -485,104 +704,73 @@ func (p *ControllerRegistor) ServeHTTP(rw http.ResponseWriter, r *http.Request) 
 	// session init
 	if SessionOn {
 		context.Input.CruSession = GlobalSessions.SessionStart(w, r)
-		defer context.Input.CruSession.SessionRelease()
+		defer func() {
+			context.Input.CruSession.SessionRelease(w)
+		}()
 	}
 
 	if !utils.InSlice(strings.ToLower(r.Method), HTTPMETHOD) {
 		http.Error(w, "Method Not Allowed", 405)
 		goto Admin
 	}
-
-	if do_filter(BeforeRouter) {
+	//static file server
+	if serverStaticRouter(context) {
 		goto Admin
 	}
 
-	//static file server
-	for prefix, staticDir := range StaticDir {
-		if r.URL.Path == "/favicon.ico" {
-			file := staticDir + r.URL.Path
-			http.ServeFile(w, r, file)
-			w.started = true
-			goto Admin
+	if !context.Input.IsGet() && !context.Input.IsHead() {
+		if CopyRequestBody && !context.Input.IsUpload() {
+			context.Input.CopyBody()
 		}
-		if strings.HasPrefix(r.URL.Path, prefix) {
-			file := staticDir + r.URL.Path[len(prefix):]
-			finfo, err := os.Stat(file)
-			if err != nil {
-				if RunMode == "dev" {
-					Warn(err)
-				}
-				http.NotFound(w, r)
-				goto Admin
-			}
-			//if the request is dir and DirectoryIndex is false then
-			if finfo.IsDir() && !DirectoryIndex {
-				middleware.Exception("403", rw, r, "403 Forbidden")
-				goto Admin
-			}
+		context.Input.ParseFormOrMulitForm(MaxMemory)
+	}
 
-			//This block obtained from (https://github.com/smithfox/beego) - it should probably get merged into astaxie/beego after a pull request
-			isStaticFileToCompress := false
-			if StaticExtensionsToGzip != nil && len(StaticExtensionsToGzip) > 0 {
-				for _, statExtension := range StaticExtensionsToGzip {
-					if strings.HasSuffix(strings.ToLower(file), strings.ToLower(statExtension)) {
-						isStaticFileToCompress = true
-						break
-					}
-				}
-			}
-
-			if isStaticFileToCompress {
-				if EnableGzip {
-					w.contentEncoding = GetAcceptEncodingZip(r)
-				}
-
-				memzipfile, err := OpenMemZipFile(file, w.contentEncoding)
-				if err != nil {
-					return
-				}
-
-				w.InitHeadContent(finfo.Size())
-
-				http.ServeContent(w, r, file, finfo.ModTime(), memzipfile)
-			} else {
-				http.ServeFile(w, r, file)
-			}
-
-			w.started = true
-			goto Admin
-		}
+	if do_filter(BeforeRouter) {
+		goto Admin
 	}
 
 	if do_filter(AfterStatic) {
 		goto Admin
 	}
 
-	if CopyRequestBody {
-		context.Input.Body()
+	if context.Input.RunController != nil && context.Input.RunMethod != "" {
+		findrouter = true
+		runMethod = context.Input.RunMethod
+		runrouter = context.Input.RunController
 	}
 
 	//first find path from the fixrouters to Improve Performance
-	for _, route := range p.fixrouters {
-		n := len(requestPath)
-		if requestPath == route.pattern {
-			runMethod = p.getRunMethod(r.Method, context, route)
-			if runMethod != "" {
-				runrouter = route.controllerType
-				findrouter = true
-				break
+	if !findrouter {
+		for _, route := range p.fixrouters {
+			n := len(requestPath)
+			if requestPath == route.pattern {
+				runMethod = p.getRunMethod(r.Method, context, route)
+				if runMethod != "" {
+					routerInfo = route
+					runrouter = route.controllerType
+					findrouter = true
+					break
+				}
 			}
-		}
-		// pattern /admin   url /admin 200  /admin/ 200
-		// pattern /admin/  url /admin 301  /admin/ 200
-		if requestPath[n-1] != '/' && len(route.pattern) == n+1 &&
-			route.pattern[n] == '/' && route.pattern[:n] == requestPath {
-			http.Redirect(w, r, requestPath+"/", 301)
-			goto Admin
-		}
-		if requestPath[n-1] == '/' && n >= 2 && requestPath[:n-2] == route.pattern {
-			runMethod = p.getRunMethod(r.Method, context, route)
-			if runMethod != "" {
+			// pattern /admin   url /admin 200  /admin/ 200
+			// pattern /admin/  url /admin 301  /admin/ 200
+			if requestPath[n-1] != '/' && requestPath+"/" == route.pattern {
+				http.Redirect(w, r, requestPath+"/", 301)
+				goto Admin
+			}
+			if requestPath[n-1] == '/' && route.pattern+"/" == requestPath {
+				runMethod = p.getRunMethod(r.Method, context, route)
+				if runMethod != "" {
+					routerInfo = route
+					runrouter = route.controllerType
+					findrouter = true
+					break
+				}
+			}
+			if route.routerType == routerTypeHandler && route.isPrefix &&
+				strings.HasPrefix(requestPath, route.pattern) {
+
+				routerInfo = route
 				runrouter = route.controllerType
 				findrouter = true
 				break
@@ -609,17 +797,13 @@ func (p *ControllerRegistor) ServeHTTP(rw http.ResponseWriter, r *http.Request) 
 			}
 
 			if len(route.params) > 0 {
-				//add url parameters to the query param map
-				values := r.URL.Query()
 				for i, match := range matches[1:] {
-					values.Add(route.params[i], match)
 					params[route.params[i]] = match
 				}
-				//reassemble query params and add to RawQuery
-				r.URL.RawQuery = url.Values(values).Encode()
 			}
 			runMethod = p.getRunMethod(r.Method, context, route)
 			if runMethod != "" {
+				routerInfo = route
 				runrouter = route.controllerType
 				context.Input.Params = params
 				findrouter = true
@@ -686,72 +870,86 @@ func (p *ControllerRegistor) ServeHTTP(rw http.ResponseWriter, r *http.Request) 
 	}
 
 	if findrouter {
-		if r.Method == "POST" {
-			r.ParseMultipartForm(MaxMemory)
-		}
 		//execute middleware filters
 		if do_filter(BeforeExec) {
 			goto Admin
 		}
-
-		//Invoke the request handler
-		vc := reflect.New(runrouter)
-		execController, ok := vc.Interface().(ControllerInterface)
-		if !ok {
-			panic("controller is not ControllerInterface")
-		}
-
-		//call the controller init function
-		execController.Init(context, runrouter.Name(), runMethod, vc.Interface())
-
-		//if XSRF is Enable then check cookie where there has any cookie in the  request's cookie _csrf
-		if EnableXSRF {
-			execController.XsrfToken()
-			if r.Method == "POST" || r.Method == "DELETE" || r.Method == "PUT" ||
-				(r.Method == "POST" && (r.Form.Get("_method") == "delete" || r.Form.Get("_method") == "put")) {
-				execController.CheckXsrfCookie()
+		isRunable := false
+		if routerInfo != nil {
+			if routerInfo.routerType == routerTypeRESTFul {
+				if _, ok := routerInfo.methods[strings.ToLower(r.Method)]; ok {
+					isRunable = true
+					routerInfo.runfunction(context)
+				} else {
+					middleware.Exception("405", rw, r, "Method Not Allowed")
+					goto Admin
+				}
+			} else if routerInfo.routerType == routerTypeHandler {
+				isRunable = true
+				routerInfo.handler.ServeHTTP(rw, r)
 			}
 		}
 
-		//call prepare function
-		execController.Prepare()
-
-		if !w.started {
-			//exec main logic
-			switch runMethod {
-			case "Get":
-				execController.Get()
-			case "Post":
-				execController.Post()
-			case "Delete":
-				execController.Delete()
-			case "Put":
-				execController.Put()
-			case "Head":
-				execController.Head()
-			case "Patch":
-				execController.Patch()
-			case "Options":
-				execController.Options()
-			default:
-				in := make([]reflect.Value, 0)
-				method := vc.MethodByName(runMethod)
-				method.Call(in)
+		if !isRunable {
+			//Invoke the request handler
+			vc := reflect.New(runrouter)
+			execController, ok := vc.Interface().(ControllerInterface)
+			if !ok {
+				panic("controller is not ControllerInterface")
 			}
 
-			//render template
-			if !w.started && !context.Input.IsWebsocket() {
-				if AutoRender {
-					if err := execController.Render(); err != nil {
-						panic(err)
-					}
+			//call the controller init function
+			execController.Init(context, runrouter.Name(), runMethod, vc.Interface())
 
+			//call prepare function
+			execController.Prepare()
+
+			//if XSRF is Enable then check cookie where there has any cookie in the  request's cookie _csrf
+			if EnableXSRF {
+				execController.XsrfToken()
+				if r.Method == "POST" || r.Method == "DELETE" || r.Method == "PUT" ||
+					(r.Method == "POST" && (r.Form.Get("_method") == "delete" || r.Form.Get("_method") == "put")) {
+					execController.CheckXsrfCookie()
 				}
 			}
-		}
 
-		// finish all runrouter. release resource
-		execController.Finish()
+			if !w.started {
+				//exec main logic
+				switch runMethod {
+				case "Get":
+					execController.Get()
+				case "Post":
+					execController.Post()
+				case "Delete":
+					execController.Delete()
+				case "Put":
+					execController.Put()
+				case "Head":
+					execController.Head()
+				case "Patch":
+					execController.Patch()
+				case "Options":
+					execController.Options()
+				default:
+					in := make([]reflect.Value, 0)
+					method := vc.MethodByName(runMethod)
+					method.Call(in)
+				}
+
+				//render template
+				if !w.started && !context.Input.IsWebsocket() {
+					if AutoRender {
+						if err := execController.Render(); err != nil {
+							panic(err)
+						}
+
+					}
+				}
+			}
+
+			// finish all runrouter. release resource
+			execController.Finish()
+		}
 
 		//execute middleware filters
 		if do_filter(AfterExec) {
@@ -759,9 +957,8 @@ func (p *ControllerRegistor) ServeHTTP(rw http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-Admin:
 	do_filter(FinishRouter)
-
+Admin:
 	//admin module record QPS
 	if EnableAdmin {
 		timeend := time.Since(starttime)
@@ -820,26 +1017,14 @@ func (p *ControllerRegistor) getRunMethod(method string, context *beecontext.Con
 //responseWriter is a wrapper for the http.ResponseWriter
 //started set to true if response was written to then don't execute other handler
 type responseWriter struct {
-	writer          http.ResponseWriter
-	started         bool
-	status          int
-	contentEncoding string
+	writer  http.ResponseWriter
+	started bool
+	status  int
 }
 
 // Header returns the header map that will be sent by WriteHeader.
 func (w *responseWriter) Header() http.Header {
 	return w.writer.Header()
-}
-
-// Init content-length header.
-func (w *responseWriter) InitHeadContent(contentlength int64) {
-	if w.contentEncoding == "gzip" {
-		w.Header().Set("Content-Encoding", "gzip")
-	} else if w.contentEncoding == "deflate" {
-		w.Header().Set("Content-Encoding", "deflate")
-	} else {
-		w.Header().Set("Content-Length", strconv.FormatInt(contentlength, 10))
-	}
 }
 
 // Write writes the data to the connection as part of an HTTP reply,
@@ -856,4 +1041,14 @@ func (w *responseWriter) WriteHeader(code int) {
 	w.status = code
 	w.started = true
 	w.writer.WriteHeader(code)
+}
+
+// hijacker for http
+func (w *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := w.writer.(http.Hijacker)
+	if !ok {
+		println("supported?")
+		return nil, nil, errors.New("webserver doesn't support hijacking")
+	}
+	return hj.Hijack()
 }

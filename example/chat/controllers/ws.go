@@ -1,12 +1,19 @@
+// Beego (http://beego.me/)
+// @description beego is an open-source, high-performance web framework for the Go programming language.
+// @link        http://github.com/astaxie/beego for the canonical source repository
+// @license     http://github.com/astaxie/beego/blob/master/LICENSE
+// @authors     Unknwon
+
 package controllers
 
 import (
-	"github.com/astaxie/beego"
-	"github.com/garyburd/go-websocket/websocket"
 	"io/ioutil"
 	"math/rand"
 	"net/http"
 	"time"
+
+	"github.com/astaxie/beego"
+	"github.com/gorilla/websocket"
 )
 
 const (

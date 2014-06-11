@@ -1,17 +1,26 @@
+// Beego (http://beego.me/)
+// @description beego is an open-source, high-performance web framework for the Go programming language.
+// @link        http://github.com/astaxie/beego for the canonical source repository
+// @license     http://github.com/astaxie/beego/blob/master/LICENSE
+// @authors     astaxie
+
 package middleware
 
 import "fmt"
 
+// http exceptions
 type HTTPException struct {
 	StatusCode  int // http status code 4xx, 5xx
 	Description string
 }
 
+// return http exception error string, e.g. "400 Bad Request".
 func (e *HTTPException) Error() string {
-	// return `status description`, e.g. `400 Bad Request`
 	return fmt.Sprintf("%d %s", e.StatusCode, e.Description)
 }
 
+// map of http exceptions for each http status code int.
+// defined 400,401,403,404,405,500,502,503 and 504 default.
 var HTTPExceptionMaps map[int]HTTPException
 
 func init() {

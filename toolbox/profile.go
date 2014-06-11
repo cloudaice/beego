@@ -1,3 +1,9 @@
+// Beego (http://beego.me/)
+// @description beego is an open-source, high-performance web framework for the Go programming language.
+// @link        http://github.com/astaxie/beego for the canonical source repository
+// @license     http://github.com/astaxie/beego/blob/master/LICENSE
+// @authors     astaxie
+
 package toolbox
 
 import (
@@ -19,6 +25,7 @@ func init() {
 	pid = os.Getpid()
 }
 
+// parse input command string
 func ProcessInput(input string, w io.Writer) {
 	switch input {
 	case "lookup goroutine":
@@ -44,9 +51,10 @@ func ProcessInput(input string, w io.Writer) {
 	}
 }
 
+// record memory profile in pprof
 func MemProf() {
 	if f, err := os.Create("mem-" + strconv.Itoa(pid) + ".memprof"); err != nil {
-		log.Fatal("record memory profile failed: %v", err)
+		log.Fatal("record memory profile failed: ", err)
 	} else {
 		runtime.GC()
 		pprof.WriteHeapProfile(f)
@@ -54,6 +62,7 @@ func MemProf() {
 	}
 }
 
+// start cpu profile monitor
 func StartCPUProfile() {
 	f, err := os.Create("cpu-" + strconv.Itoa(pid) + ".pprof")
 	if err != nil {
@@ -62,10 +71,12 @@ func StartCPUProfile() {
 	pprof.StartCPUProfile(f)
 }
 
+// stop cpu profile monitor
 func StopCPUProfile() {
 	pprof.StopCPUProfile()
 }
 
+// print gc information to io.Writer
 func PrintGCSummary(w io.Writer) {
 	memStats := &runtime.MemStats{}
 	runtime.ReadMemStats(memStats)
@@ -114,7 +125,7 @@ func avg(items []time.Duration) time.Duration {
 	return time.Duration(int64(sum) / int64(len(items)))
 }
 
-// human readable format
+// format bytes number friendly
 func toH(bytes uint64) string {
 	switch {
 	case bytes < 1024:
